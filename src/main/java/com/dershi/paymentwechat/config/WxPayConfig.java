@@ -6,11 +6,9 @@ import com.wechat.pay.contrib.apache.httpclient.auth.Verifier;
 import com.wechat.pay.contrib.apache.httpclient.auth.WechatPay2Credentials;
 import com.wechat.pay.contrib.apache.httpclient.auth.WechatPay2Validator;
 import com.wechat.pay.contrib.apache.httpclient.cert.CertificatesManager;
-import com.wechat.pay.contrib.apache.httpclient.exception.HttpCodeException;
-import com.wechat.pay.contrib.apache.httpclient.exception.NotFoundException;
 import com.wechat.pay.contrib.apache.httpclient.util.PemUtil;
 import lombok.Data;
-import org.apache.http.client.methods.CloseableHttpResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -19,15 +17,14 @@ import org.springframework.context.annotation.PropertySource;
 
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.security.GeneralSecurityException;
 import java.security.PrivateKey;
 
 @Configuration
 @ConfigurationProperties(prefix = "wxpay")
 @PropertySource("classpath:wxpay.properties")
 @Data
+@Slf4j
 public class WxPayConfig {
     // 商户号
     private String mchId;
@@ -70,6 +67,7 @@ public class WxPayConfig {
      */
     @Bean
     public Verifier getVerifier() {
+        log.info("获取签名验证器");
         // 商户私钥对象
         PrivateKey privateKey = getPrivateKey(privateKeyPath);
         // 私钥签名对象
@@ -102,6 +100,7 @@ public class WxPayConfig {
      */
     @Bean
     public CloseableHttpClient getWxPayClient(Verifier verifier) {
+        log.info("获取HttpClient对象");
         // 商户私钥对象
         PrivateKey privateKey = getPrivateKey(privateKeyPath);
 

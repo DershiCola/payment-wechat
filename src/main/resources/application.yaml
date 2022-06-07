@@ -19,3 +19,7 @@ mybatis-plus:
   mapper-locations: classpath:com/dershi/paymentwechat/mapper/xml/*.xml
   configuration:
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+logging:
+  level:
+    root: debug

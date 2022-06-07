@@ -26,7 +26,7 @@ public class ProductController {
         return R.ok().data("now", new Date());
     }
 
-    @GetMapping("list")
+    @GetMapping("/list")
     public R list() {
         return R.ok().data("productList", productService.list());
     }

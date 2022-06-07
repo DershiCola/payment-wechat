@@ -3,6 +3,7 @@ package com.dershi.paymentwechat.vo;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.experimental.Accessors;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -10,6 +11,7 @@ import java.util.Map;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@Accessors(chain = true) //开启链式操作
 public class R {
     private Integer code; //响应码
     private String message; //响应消息
