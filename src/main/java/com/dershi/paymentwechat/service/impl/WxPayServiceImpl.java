@@ -5,9 +5,17 @@ import com.dershi.paymentwechat.entity.OrderInfo;
 import com.dershi.paymentwechat.enums.OrderStatus;
 import com.dershi.paymentwechat.enums.wxpay.WxApiType;
 import com.dershi.paymentwechat.enums.wxpay.WxNotifyType;
+import com.dershi.paymentwechat.service.OrderInfoService;
+import com.dershi.paymentwechat.service.PaymentInfoService;
 import com.dershi.paymentwechat.service.WxPayService;
-import com.dershi.paymentwechat.util.OrderNoUtils;
+import com.dershi.paymentwechat.util.HttpUtils;
 import com.google.gson.Gson;
+import com.wechat.pay.contrib.apache.httpclient.auth.Verifier;
+import com.wechat.pay.contrib.apache.httpclient.exception.ParseException;
+import com.wechat.pay.contrib.apache.httpclient.exception.ValidationException;
+import com.wechat.pay.contrib.apache.httpclient.notification.Notification;
+import com.wechat.pay.contrib.apache.httpclient.notification.NotificationHandler;
+import com.wechat.pay.contrib.apache.httpclient.notification.NotificationRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpPost;
@@ -15,20 +23,36 @@ import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.util.EntityUtils;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import javax.annotation.Resource;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
+
+import static com.wechat.pay.contrib.apache.httpclient.constant.WechatPayHttpHeaders.*;
+import static com.wechat.pay.contrib.apache.httpclient.constant.WechatPayHttpHeaders.WECHAT_PAY_SIGNATURE;
 
 @Service
 @Slf4j
 public class WxPayServiceImpl implements WxPayService {
     @Resource
-    WxPayConfig wxPayConfig;
+    private WxPayConfig wxPayConfig;
+
+    @Resource
+    private Verifier verifier;
 
     @Resource
     private CloseableHttpClient wxPayClient;
+
+    @Resource
+    private OrderInfoService orderInfoService;
+
+    @Resource
+    private PaymentInfoService paymentInfoService;
 
     /**
      * 生成订单信息，调用统一Native下单API
@@ -41,13 +65,16 @@ public class WxPayServiceImpl implements WxPayService {
         /*
         生成订单
          */
-        OrderInfo orderInfo = new OrderInfo();
-        orderInfo.setTitle("test");
-        orderInfo.setOrderNo(OrderNoUtils.getOrderNo());
-        orderInfo.setProductId(productId);
-        orderInfo.setTotalFee(1);
-        orderInfo.setOrderStatus(OrderStatus.NOTPAY.getType());
-        //TODO:将订单信息写入数据库
+        OrderInfo orderInfo = orderInfoService.getOrderInfoByProductId(productId);
+        String codeUrl = orderInfo.getCodeUrl();
+        // 已存在未支付的订单且有二维码
+        if (!StringUtils.isEmpty(codeUrl)) {
+            log.info("存在未支付订单和对应二维码，且在2小时有效期内");
+            Map<String, Object> map = new HashMap<>();
+            map.put("codeUrl", codeUrl);
+            map.put("orderNo", orderInfo.getOrderNo());
+            return map;
+        }
 
         /*
         生成二维码链接
@@ -92,8 +119,11 @@ public class WxPayServiceImpl implements WxPayService {
             }
             // 解析响应体得到二维码链接
             HashMap<String, String> bodyAsMap = gson.fromJson(bodyAsString, HashMap.class);
-            String codeUrl = bodyAsMap.get("code_url");
+            codeUrl = bodyAsMap.get("code_url");
 
+            // 保存二维码链接
+            log.info("保存了新的二维码链接");
+            orderInfoService.saveCodeUrl(orderInfo.getOrderNo(), codeUrl);
 
             /*
             返回订单和二维码信息
@@ -106,5 +136,60 @@ public class WxPayServiceImpl implements WxPayService {
         } finally {
             response.close();
         }
+    }
+
+    /**
+     * 回调通知，微信支付平台向商户发送请求，通知商户订单的支付结果
+     * @param request:微信支付平台的http请求
+     * @return 验签接收到的通知对象
+     * @throws Exception:验签失败告知上层调用
+     */
+    @Override
+    public Notification nativeNotify(HttpServletRequest request) throws Exception {
+        Gson gson = new Gson();
+
+        // 处理通知请求
+        String body = HttpUtils.readData(request);
+        HashMap<String, Object> bodyMap = gson.fromJson(body, HashMap.class);
+
+        log.info("通知ID => {}", bodyMap.get("id"));
+        log.info("通知信息整体 => {}", body);
+
+        // 根据SDK封装通知请求
+        NotificationRequest notificationRequest = new NotificationRequest.Builder().withSerialNumber(request.getHeader(WECHAT_PAY_SERIAL))
+                .withNonce(request.getHeader(WECHAT_PAY_NONCE))
+                .withTimestamp(request.getHeader(WECHAT_PAY_TIMESTAMP))
+                .withSignature(request.getHeader(WECHAT_PAY_SIGNATURE))
+                .withBody(body)
+                .build();
+        NotificationHandler handler = new NotificationHandler(verifier, wxPayConfig.getApiV3Key().getBytes(StandardCharsets.UTF_8));
+
+        /*
+        验签和解析通知参数
+         */
+        // 验签成功得到通知密文
+        return handler.parse(notificationRequest);
+
+    }
+
+    /**
+     * 解密被加密的通知信息，获取订单支付成功的具体信息，并更新处理订单，记录支付日志
+     * @param notification:验签成功后得到的通知对象
+     */
+    @Override
+    public void processorOrder(Notification notification) {
+        Gson gson = new Gson();
+
+        // 解密 -> 获取支付成功的通知信息参数
+        String plainText = notification.getDecryptData();
+        log.info("解密得到通知明文 => {}", plainText);
+
+        //更新订单状态
+        HashMap<String, String> map = gson.fromJson(plainText, HashMap.class);
+        orderInfoService.updateOrderStatusByOrderNo(map.get("out_trade_no"), OrderStatus.valueOf(map.get("trade_state")).getType());
+        log.info("更新订单状态 => {}", map.get("trade_state"));
+
+        //记录支付日志
+        paymentInfoService.createPaymentInfo(plainText);
     }
 }
