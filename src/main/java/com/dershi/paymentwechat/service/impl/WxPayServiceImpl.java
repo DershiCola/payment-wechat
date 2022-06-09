@@ -11,8 +11,6 @@ import com.dershi.paymentwechat.service.WxPayService;
 import com.dershi.paymentwechat.util.HttpUtils;
 import com.google.gson.Gson;
 import com.wechat.pay.contrib.apache.httpclient.auth.Verifier;
-import com.wechat.pay.contrib.apache.httpclient.exception.ParseException;
-import com.wechat.pay.contrib.apache.httpclient.exception.ValidationException;
 import com.wechat.pay.contrib.apache.httpclient.notification.Notification;
 import com.wechat.pay.contrib.apache.httpclient.notification.NotificationHandler;
 import com.wechat.pay.contrib.apache.httpclient.notification.NotificationRequest;
@@ -27,11 +25,12 @@ import org.springframework.util.StringUtils;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static com.wechat.pay.contrib.apache.httpclient.constant.WechatPayHttpHeaders.*;
 import static com.wechat.pay.contrib.apache.httpclient.constant.WechatPayHttpHeaders.WECHAT_PAY_SIGNATURE;
@@ -53,6 +52,8 @@ public class WxPayServiceImpl implements WxPayService {
 
     @Resource
     private PaymentInfoService paymentInfoService;
+
+    private final ReentrantLock lock = new ReentrantLock();
 
     /**
      * 生成订单信息，调用统一Native下单API
@@ -183,13 +184,38 @@ public class WxPayServiceImpl implements WxPayService {
         // 解密 -> 获取支付成功的通知信息参数
         String plainText = notification.getDecryptData();
         log.info("解密得到通知明文 => {}", plainText);
-
-        //更新订单状态
         HashMap<String, String> map = gson.fromJson(plainText, HashMap.class);
-        orderInfoService.updateOrderStatusByOrderNo(map.get("out_trade_no"), OrderStatus.valueOf(map.get("trade_state")).getType());
-        log.info("更新订单状态 => {}", map.get("trade_state"));
 
-        //记录支付日志
-        paymentInfoService.createPaymentInfo(plainText);
+        /*
+        处理重复通知:根据订单状态来判断是否已经通知并更新了数据，如果已经通知则直接返回，没通知则进行数据更新和日志记录
+         */
+        try {
+            // 在对业务数据进行状态检查和处理之前，要采用数据锁进行并发控制，以避免函数重入造成的数据混乱
+            if (lock.tryLock()) { //获取锁:成功获取返回true,获取失败返回false;拿不到锁可以不用等待
+                String orderStatus = orderInfoService.getOrderStatusByOrderNo(map.get("out_trade_no"));
+                // 通知的订单状态与数据库查询到的订单状态一致，则直接返回
+                if (OrderStatus.valueOf(map.get("trade_state")).getType().equals(orderStatus)) {
+                    return;
+                }
+
+                // 模拟并发问题
+//                try {
+//                    TimeUnit.SECONDS.sleep(5);
+//                } catch (InterruptedException e) {
+//                    e.printStackTrace();
+//                }
+
+                //更新订单状态
+                orderInfoService.updateOrderStatusByOrderNo(map.get("out_trade_no"), OrderStatus.valueOf(map.get("trade_state")).getType());
+                log.info("更新订单状态 => {}", map.get("trade_state"));
+
+                //记录支付日志
+                paymentInfoService.createPaymentInfo(plainText);
+            }
+        } finally {
+            // 主动释放锁
+            lock.unlock();
+        }
+
     }
 }

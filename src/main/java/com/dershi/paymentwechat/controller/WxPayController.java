@@ -1,14 +1,9 @@
 package com.dershi.paymentwechat.controller;
 
-import com.dershi.paymentwechat.config.WxPayConfig;
 import com.dershi.paymentwechat.service.WxPayService;
-import com.dershi.paymentwechat.util.HttpUtils;
 import com.dershi.paymentwechat.vo.R;
 import com.google.gson.Gson;
-import com.wechat.pay.contrib.apache.httpclient.auth.Verifier;
 import com.wechat.pay.contrib.apache.httpclient.notification.Notification;
-import com.wechat.pay.contrib.apache.httpclient.notification.NotificationHandler;
-import com.wechat.pay.contrib.apache.httpclient.notification.NotificationRequest;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import lombok.extern.slf4j.Slf4j;
@@ -17,9 +12,9 @@ import org.springframework.web.bind.annotation.*;
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 
 @CrossOrigin
@@ -54,6 +49,9 @@ public class WxPayController {
 
             // 处理更新订单
             wxPayService.processorOrder(notification);
+
+            // 模拟响应超时，微信支付平台会不断重复通知
+//            TimeUnit.SECONDS.sleep(5);
 
             // 接受且验签成功:HTTP应答状态码需返回200或204
             response.setStatus(200);
