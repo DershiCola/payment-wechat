@@ -81,9 +81,11 @@ public class WxPayServiceImpl implements WxPayService {
         生成二维码链接
          */
         // 调用统一下单API
+        // https://api.mch.weixin.qq.com/v3/pay/transactions/native
         HttpPost httpPost = new HttpPost(wxPayConfig.getDomain().concat(WxApiType.NATIVE_PAY.getType()));
         Gson gson = new Gson();
         Map<Object, Object> paramsMap = new HashMap<>();
+        // 设置请求参数
         paramsMap.put("appid", wxPayConfig.getAppid()); //应用ID
         paramsMap.put("mchid", wxPayConfig.getMchId()); //直连商户号
         paramsMap.put("description", orderInfo.getTitle()); //商品描述
@@ -106,8 +108,7 @@ public class WxPayServiceImpl implements WxPayService {
         /*
         完成签名并执行请求
          */
-        CloseableHttpResponse response = wxPayClient.execute(httpPost);
-        try {
+        try (CloseableHttpResponse response = wxPayClient.execute(httpPost)) {
             String bodyAsString = EntityUtils.toString(response.getEntity()); //响应体字符串
             int statusCode = response.getStatusLine().getStatusCode(); //响应状态码
             if (statusCode == 200) { //处理成功
@@ -115,7 +116,7 @@ public class WxPayServiceImpl implements WxPayService {
             } else if (statusCode == 204) { //处理成功，无返回Body
                 log.info("成功");
             } else {
-                log.info("Native下单失败, 响应状态码 = " + statusCode+ ", 响应结果 = " + bodyAsString);
+                log.info("Native下单失败, 响应状态码 = " + statusCode + ", 响应结果 = " + bodyAsString);
                 throw new IOException("request failed");
             }
             // 解析响应体得到二维码链接
@@ -133,20 +134,16 @@ public class WxPayServiceImpl implements WxPayService {
             map.put("codeUrl", codeUrl);
             map.put("orderNo", orderInfo.getOrderNo());
             return map;
-
-        } finally {
-            response.close();
         }
     }
 
     /**
      * 回调通知，微信支付平台向商户发送请求，通知商户订单的支付结果
      * @param request:微信支付平台的http请求
-     * @return 验签接收到的通知对象
      * @throws Exception:验签失败告知上层调用
      */
     @Override
-    public Notification nativeNotify(HttpServletRequest request) throws Exception {
+    public void nativeNotify(HttpServletRequest request) throws Exception {
         Gson gson = new Gson();
 
         // 处理通知请求
@@ -168,8 +165,11 @@ public class WxPayServiceImpl implements WxPayService {
         /*
         验签和解析通知参数
          */
-        // 验签成功得到通知密文
-        return handler.parse(notificationRequest);
+        // 验签成功得到通知对象Notification
+        Notification notification = handler.parse(notificationRequest);
+
+        // 机密通知信息，更新订单，记录支付日志
+        processorOrder(notification);
 
     }
 
@@ -177,8 +177,7 @@ public class WxPayServiceImpl implements WxPayService {
      * 解密被加密的通知信息，获取订单支付成功的具体信息，并更新处理订单，记录支付日志
      * @param notification:验签成功后得到的通知对象
      */
-    @Override
-    public void processorOrder(Notification notification) {
+    private void processorOrder(Notification notification) {
         Gson gson = new Gson();
 
         // 解密 -> 获取支付成功的通知信息参数
@@ -216,6 +215,48 @@ public class WxPayServiceImpl implements WxPayService {
             // 主动释放锁
             lock.unlock();
         }
+    }
 
+    /**
+     * 取消订单
+     * @param orderNo:订单号
+     * @throws Exception:关单失败告知上层调用
+     */
+    @Override
+    public void cancelOrder(String orderNo) throws Exception {
+        // 调用微信平台的关闭订单API
+        closeOrder(orderNo);
+
+        // 更新订单状态
+        orderInfoService.updateOrderStatusByOrderNo(orderNo, OrderStatus.CANCEL.getType());
+    }
+
+    private void closeOrder(String orderNo) throws Exception {
+        // 调用关闭订单API
+        // https://api.mch.weixin.qq.com/v3/pay/transactions/out-trade-no/{out_trade_no}/close
+        HttpPost httpPost = new HttpPost(wxPayConfig.getDomain().concat(String.format(WxApiType.CLOSE_ORDER_BY_NO.getType(), orderNo)));
+        Gson gson = new Gson();
+        Map<Object, Object> paramsMap = new HashMap<>();
+        // 设置请求参数
+        paramsMap.put("mchid", wxPayConfig.getMchId());
+        String paramsJson = gson.toJson(paramsMap);
+        // 设置entity
+        StringEntity entity = new StringEntity(paramsJson,"utf-8");
+        entity.setContentType("application/json");
+        httpPost.setEntity(entity);
+        httpPost.setHeader("Accept", "application/json");
+
+        // 发起请求，得到响应(只有响应状态码，没有响应body)
+        try (CloseableHttpResponse response = wxPayClient.execute(httpPost)) {
+            int statusCode = response.getStatusLine().getStatusCode(); //响应状态码
+            if (statusCode == 200) { //成功取消订单
+                log.info("成功取消订单");
+            } else if (statusCode == 204) {
+                log.info("成功取消订单");
+            } else {
+                log.info("取消下单失败, 响应状态码 = " + statusCode);
+                throw new IOException("cancel order failed");
+            }
+        }
     }
 }

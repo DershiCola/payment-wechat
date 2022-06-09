@@ -3,7 +3,6 @@ package com.dershi.paymentwechat.controller;
 import com.dershi.paymentwechat.service.WxPayService;
 import com.dershi.paymentwechat.vo.R;
 import com.google.gson.Gson;
-import com.wechat.pay.contrib.apache.httpclient.notification.Notification;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import lombok.extern.slf4j.Slf4j;
@@ -28,9 +27,15 @@ public class WxPayController {
 
     @ApiOperation("调用Native统一下单API，生成二维码链接")
     @PostMapping("/native/{productId}")
-    public R nativePay(@PathVariable Long productId) throws Exception {
+    public R nativePay(@PathVariable Long productId) {
         log.info("发起支付请求");
-        Map<String, Object> map = wxPayService.nativePay(productId);
+        Map<String, Object> map;
+        try {
+            map = wxPayService.nativePay(productId);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return R.error().setMessage("下单异常");
+        }
         return R.ok().setData(map);
     }
 
@@ -43,12 +48,9 @@ public class WxPayController {
         Map<String, String> map = new HashMap<>();
 
         try {
-            Notification notification = wxPayService.nativeNotify(request);
+            wxPayService.nativeNotify(request);
             // 验签没有抛出异常，说明验签成功
             log.info("通知验签成功");
-
-            // 处理更新订单
-            wxPayService.processorOrder(notification);
 
             // 模拟响应超时，微信支付平台会不断重复通知
 //            TimeUnit.SECONDS.sleep(5);
@@ -66,6 +68,17 @@ public class WxPayController {
             map.put("message", e.getMessage());
             return gson.toJson(map);
         }
+    }
 
+    @PostMapping("/cancel/{orderNo}")
+    public R cancel(@PathVariable String orderNo) {
+        log.info("取消订单 = {}", orderNo);
+        try {
+            wxPayService.cancelOrder(orderNo);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return R.error().setMessage("取消订单失败");
+        }
+        return R.ok().setMessage("成功取消订单");
     }
 }
