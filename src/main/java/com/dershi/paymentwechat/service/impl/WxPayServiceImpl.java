@@ -5,6 +5,7 @@ import com.dershi.paymentwechat.entity.OrderInfo;
 import com.dershi.paymentwechat.enums.OrderStatus;
 import com.dershi.paymentwechat.enums.wxpay.WxApiType;
 import com.dershi.paymentwechat.enums.wxpay.WxNotifyType;
+import com.dershi.paymentwechat.enums.wxpay.WxTradeState;
 import com.dershi.paymentwechat.service.OrderInfoService;
 import com.dershi.paymentwechat.service.PaymentInfoService;
 import com.dershi.paymentwechat.service.WxPayService;
@@ -16,6 +17,7 @@ import com.wechat.pay.contrib.apache.httpclient.notification.NotificationHandler
 import com.wechat.pay.contrib.apache.httpclient.notification.NotificationRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
@@ -227,7 +229,7 @@ public class WxPayServiceImpl implements WxPayService {
         // 调用微信平台的关闭订单API
         closeOrder(orderNo);
 
-        // 更新订单状态
+        // 更新订单状态为"用户已取消"
         orderInfoService.updateOrderStatusByOrderNo(orderNo, OrderStatus.CANCEL.getType());
     }
 
@@ -257,6 +259,62 @@ public class WxPayServiceImpl implements WxPayService {
                 log.info("取消下单失败, 响应状态码 = " + statusCode);
                 throw new IOException("cancel order failed");
             }
+        }
+    }
+
+    /**
+     * 调用微信平台的查询订单API获取订单信息
+     * @param orderNo:订单号
+     * @return 调用API后返回的订单信息
+     */
+    @Override
+    public String queryOrder(String orderNo) throws Exception {
+        // 调用查单API
+        // https://api.mch.weixin.qq.com/v3/pay/transactions/out-trade-no/{out_trade_no}
+        HttpGet httpGet = new HttpGet(wxPayConfig.getDomain()
+                .concat(String.format(WxApiType.ORDER_QUERY_BY_NO.getType(), orderNo))
+                .concat("?mchid=").concat(wxPayConfig.getMchId()));
+        httpGet.setHeader("Accept", "application/json");
+
+        try (CloseableHttpResponse response = wxPayClient.execute(httpGet)) {
+            int statusCode = response.getStatusLine().getStatusCode();
+            if (statusCode == 200 || statusCode == 204) { //查询成功
+                log.info("查询订单成功");
+            } else {
+                log.info("查询订单失败, 响应状态码 = " + statusCode + ", 错误信息 = " + EntityUtils.toString(response.getEntity()));
+            }
+            return EntityUtils.toString(response.getEntity());
+        } catch (Exception e) {
+            throw new Exception(EntityUtils.toString(wxPayClient.execute(httpGet).getEntity()));
+        }
+    }
+
+    @Override
+    public void checkOrderStatus(String orderNo) throws Exception {
+        Gson gson = new Gson();
+        String bodyJson = queryOrder(orderNo);
+        HashMap<String, String> map = gson.fromJson(bodyJson, HashMap.class);
+
+        // 确认订单支付成功
+        if (WxTradeState.SUCCESS.getType().equals(map.get("trade_state"))) {
+            log.info("微信平台确认订单状态为\"支付成功\" => {}", orderNo);
+            // 更新商户订单的订单状态为"支付成功"
+            log.info("更新商户订单状态为\"支付成功\" => {}", orderNo);
+            orderInfoService.updateOrderStatusByOrderNo(orderNo, OrderStatus.SUCCESS.getType());
+            // 记录支付日志
+            log.info("创建支付日志 => {}", orderNo);
+            paymentInfoService.createPaymentInfo(bodyJson);
+        }
+
+        // 确认订单未支付
+        if (WxTradeState.NOTPAY.getType().equals(map.get("trade_state"))) {
+            log.info("微信平台确认订单状态为\"未支付\" => {}", orderNo);
+            // 关闭订单
+            log.info("关闭订单 => {}", orderNo);
+            closeOrder(orderNo);
+            // 更新商户订单的订单状态为"超时已关闭"
+            log.info("更新商户订单状态为\"超时已关闭\" => {}", orderNo);
+            orderInfoService.updateOrderStatusByOrderNo(orderNo, OrderStatus.CLOSED.getType());
         }
     }
 }

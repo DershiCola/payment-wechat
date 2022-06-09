@@ -29,7 +29,7 @@ public class OrderInfoController {
     }
 
     /**
-     * 查看订单状态(前端根据订单状态是否支付成功关闭二维码展示)
+     * 查看订单状态(前端根据订单状态是否支付成功关闭二维码)
      * @param orderNo:订单号
      * @return 传给前端的code和message，code:0表示支付成功,101表示正在支付...
      */

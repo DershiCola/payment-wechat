@@ -19,4 +19,11 @@ public interface WxPayService {
      * 取消订单
      */
     void cancelOrder(String orderNo) throws Exception;
+
+    /**
+     * 调用微信平台API查询订单信息
+     */
+    String queryOrder(String orderNo) throws Exception;
+
+    void checkOrderStatus(String orderNo) throws Exception;
 }

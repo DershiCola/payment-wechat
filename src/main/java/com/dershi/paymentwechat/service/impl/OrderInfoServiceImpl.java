@@ -12,6 +12,8 @@ import com.dershi.paymentwechat.util.OrderNoUtils;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Date;
 import java.util.List;
 
@@ -33,10 +35,7 @@ public class OrderInfoServiceImpl extends ServiceImpl<OrderInfoMapper, OrderInfo
         // 存在则返回，避免重复生成订单（暂未考虑用户ID的情形）
         OrderInfo orderInfo = getUnPaidOrderByProductId(productId);
         if (orderInfo != null) {
-            // 若订单已过期，则删除，新建订单
-            if (overdue(orderInfo.getCreateTime())) {
-                deleteOrderInfoByOrderNo(orderInfo.getOrderNo());
-            } else return orderInfo; // 未过期则直接返回
+            return orderInfo; // 未过期则直接返回
         }
 
         // 获取商品信息
@@ -71,17 +70,6 @@ public class OrderInfoServiceImpl extends ServiceImpl<OrderInfoMapper, OrderInfo
 
         // 更新二维码链接字段
         baseMapper.update(orderInfo, queryWrapper);
-    }
-
-    /**
-     * 判断未支付的订单是否超过超过2小时（有效期）
-     * @param createTime:订单生成日期
-     * @return ture:已过期  false:在有效期内
-     */
-    private boolean overdue(Date createTime) {
-        long time = createTime.getTime();
-        long currentTime = System.currentTimeMillis();
-        return (currentTime - time) >= 2L * 3600L * 1000L;
     }
 
     /**
@@ -135,6 +123,20 @@ public class OrderInfoServiceImpl extends ServiceImpl<OrderInfoMapper, OrderInfo
             return null;
         }
         return orderInfo.getOrderStatus();
+    }
+
+    /**
+     * 查询创建时间超过minutes分钟且未支付的订单
+     * @param minutes:分钟
+     * @return 超时未支付的订单
+     */
+    @Override
+    public List<OrderInfo> getUnpaidOrdersByDuration(int minutes) {
+        Instant instant = Instant.now().minus(Duration.ofMinutes(minutes));
+        QueryWrapper<OrderInfo> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("order_status", OrderStatus.NOTPAY.getType());
+        queryWrapper.le("create_time", instant);
+        return baseMapper.selectList(queryWrapper);
     }
 
     /**

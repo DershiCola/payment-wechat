@@ -70,15 +70,27 @@ public class WxPayController {
         }
     }
 
+    @ApiOperation("取消订单")
     @PostMapping("/cancel/{orderNo}")
-    public R cancel(@PathVariable String orderNo) {
+    public R cancelOrder(@PathVariable String orderNo) {
         log.info("取消订单 = {}", orderNo);
         try {
             wxPayService.cancelOrder(orderNo);
+            return R.ok().setMessage("成功取消订单");
         } catch (Exception e) {
             e.printStackTrace();
             return R.error().setMessage("取消订单失败");
         }
-        return R.ok().setMessage("成功取消订单");
+    }
+
+    @ApiOperation("查询订单")
+    @GetMapping("/query/{orderNo}")
+    public R queryOrder(@PathVariable String orderNo) {
+        try {
+            String result = wxPayService.queryOrder(orderNo);
+            return R.ok().setMessage("查询成功").data("result", result);
+        } catch (Exception e) {
+            return R.error().setMessage("查询失败").data("errorReason", e.getMessage());
+        }
     }
 }
