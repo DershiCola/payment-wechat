@@ -2,16 +2,22 @@ package com.dershi.paymentwechat.service.impl;
 
 import com.dershi.paymentwechat.config.WxPayConfig;
 import com.dershi.paymentwechat.entity.OrderInfo;
+import com.dershi.paymentwechat.entity.RefundInfo;
 import com.dershi.paymentwechat.enums.OrderStatus;
 import com.dershi.paymentwechat.enums.wxpay.WxApiType;
 import com.dershi.paymentwechat.enums.wxpay.WxNotifyType;
+import com.dershi.paymentwechat.enums.wxpay.WxRefundStatus;
 import com.dershi.paymentwechat.enums.wxpay.WxTradeState;
 import com.dershi.paymentwechat.service.OrderInfoService;
 import com.dershi.paymentwechat.service.PaymentInfoService;
+import com.dershi.paymentwechat.service.RefundInfoService;
 import com.dershi.paymentwechat.service.WxPayService;
 import com.dershi.paymentwechat.util.HttpUtils;
+import com.dershi.paymentwechat.vo.R;
 import com.google.gson.Gson;
 import com.wechat.pay.contrib.apache.httpclient.auth.Verifier;
+import com.wechat.pay.contrib.apache.httpclient.exception.ParseException;
+import com.wechat.pay.contrib.apache.httpclient.exception.ValidationException;
 import com.wechat.pay.contrib.apache.httpclient.notification.Notification;
 import com.wechat.pay.contrib.apache.httpclient.notification.NotificationHandler;
 import com.wechat.pay.contrib.apache.httpclient.notification.NotificationRequest;
@@ -54,6 +60,9 @@ public class WxPayServiceImpl implements WxPayService {
 
     @Resource
     private PaymentInfoService paymentInfoService;
+
+    @Resource
+    private RefundInfoService refundInfoService;
 
     private final ReentrantLock lock = new ReentrantLock();
 
@@ -118,8 +127,7 @@ public class WxPayServiceImpl implements WxPayService {
             } else if (statusCode == 204) { //处理成功，无返回Body
                 log.info("成功");
             } else {
-                log.info("Native下单失败, 响应状态码 = " + statusCode + ", 响应结果 = " + bodyAsString);
-                throw new IOException("request failed");
+                throw new RuntimeException("Native下单失败, 响应状态码 = " + statusCode + ", 响应结果 = " + bodyAsString);
             }
             // 解析响应体得到二维码链接
             HashMap<String, String> bodyAsMap = gson.fromJson(bodyAsString, HashMap.class);
@@ -140,12 +148,26 @@ public class WxPayServiceImpl implements WxPayService {
     }
 
     /**
-     * 回调通知，微信支付平台向商户发送请求，通知商户订单的支付结果
+     * 支付回调通知，微信支付平台向商户发送请求，通知商户订单的支付结果
      * @param request:微信支付平台的http请求
      * @throws Exception:验签失败告知上层调用
      */
     @Override
     public void nativeNotify(HttpServletRequest request) throws Exception {
+        // 处理请求,得到通知信息
+        Notification notification = processRequest(request);
+
+        // 解密通知信息，更新订单和支付日志
+        processOrder(notification);
+
+    }
+
+    /**
+     * 处理回调通知，返回验签解密后的通知信息
+     * @param request:微信平台发送的回调请求
+     * @return 回调通知信息
+     */
+    private Notification processRequest(HttpServletRequest request) throws Exception {
         Gson gson = new Gson();
 
         // 处理通知请求
@@ -168,23 +190,19 @@ public class WxPayServiceImpl implements WxPayService {
         验签和解析通知参数
          */
         // 验签成功得到通知对象Notification
-        Notification notification = handler.parse(notificationRequest);
-
-        // 机密通知信息，更新订单，记录支付日志
-        processorOrder(notification);
-
+        return handler.parse(notificationRequest);
     }
 
     /**
      * 解密被加密的通知信息，获取订单支付成功的具体信息，并更新处理订单，记录支付日志
      * @param notification:验签成功后得到的通知对象
      */
-    private void processorOrder(Notification notification) {
+    private void processOrder(Notification notification) {
         Gson gson = new Gson();
 
         // 解密 -> 获取支付成功的通知信息参数
         String plainText = notification.getDecryptData();
-        log.info("解密得到通知明文 => {}", plainText);
+        log.info("解密得到支付通知明文 => {}", plainText);
         HashMap<String, String> map = gson.fromJson(plainText, HashMap.class);
 
         /*
@@ -256,8 +274,7 @@ public class WxPayServiceImpl implements WxPayService {
             } else if (statusCode == 204) {
                 log.info("成功取消订单");
             } else {
-                log.info("取消下单失败, 响应状态码 = " + statusCode);
-                throw new IOException("cancel order failed");
+                throw new RuntimeException("取消订单失败, 响应状态码 = " + statusCode);
             }
         }
     }
@@ -289,6 +306,10 @@ public class WxPayServiceImpl implements WxPayService {
         }
     }
 
+    /**
+     * 调用查单API确认创建超时的订单的状态，如果为已支付则更新商户订单信息并记录支付日志，如果为未支付则关闭订单
+     * @param orderNo:订单号
+     */
     @Override
     public void checkOrderStatus(String orderNo) throws Exception {
         Gson gson = new Gson();
@@ -315,6 +336,155 @@ public class WxPayServiceImpl implements WxPayService {
             // 更新商户订单的订单状态为"超时已关闭"
             log.info("更新商户订单状态为\"超时已关闭\" => {}", orderNo);
             orderInfoService.updateOrderStatusByOrderNo(orderNo, OrderStatus.CLOSED.getType());
+        }
+    }
+
+
+    /**
+     * 退款，调用微信普通退款API
+     * @param orderNo:订单号
+     * @param reason:退款原因
+     */
+    @Override
+    public void refunds(String orderNo, String reason) throws Exception {
+        // 创建退款订单记录对象
+        RefundInfo refundInfo = refundInfoService.createRefundInfoByOrderNo(orderNo, reason);
+        log.info("创建退款订单 = {}", refundInfo.getRefundNo());
+
+
+        // 申请退款API
+        // https://api.mch.weixin.qq.com/v3/refund/domestic/refunds
+        HttpPost httpPost = new HttpPost(wxPayConfig.getDomain().concat(WxApiType.DOMESTIC_REFUNDS.getType()));
+        Gson gson = new Gson();
+        Map<Object, Object> paramsMap = new HashMap<>();
+        // 设置请求参数
+        paramsMap.put("out_trade_no", refundInfo.getOrderNo());
+        paramsMap.put("out_refund_no", refundInfo.getRefundNo());
+        paramsMap.put("notify_url", wxPayConfig.getNotifyDomain().concat(WxNotifyType.REFUND_NOTIFY.getType()));
+        Map<String, Object> amount = new HashMap<>();
+        amount.put("refund", refundInfo.getRefund());
+        amount.put("total", refundInfo.getTotalFee());
+        amount.put("currency", "CNY");
+        paramsMap.put("amount", amount);
+        String paramsJson = gson.toJson(paramsMap);
+        // 设置entity
+        StringEntity entity = new StringEntity(paramsJson,"utf-8");
+        entity.setContentType("application/json");
+        httpPost.setEntity(entity);
+        httpPost.setHeader("Accept", "application/json");
+
+        try (CloseableHttpResponse response = wxPayClient.execute(httpPost)) {
+            String bodyAsString = EntityUtils.toString(response.getEntity());
+            int statusCode = response.getStatusLine().getStatusCode();
+            if (statusCode == 200) { //退款成功
+                log.info("退款成功, 响应信息 = {}", bodyAsString);
+            } else if (statusCode == 204) {
+                log.info("退款成功");
+            } else {
+                throw new RuntimeException("退款失败, 响应状态码 = " + statusCode + ", 错误信息 = " + bodyAsString);
+            }
+
+            HashMap<String, String> map = gson.fromJson(bodyAsString, HashMap.class);
+            String refundStatus = map.get("status");
+
+            // 更新商户订单
+            orderInfoService.updateOrderStatusByOrderNo(refundInfo.getOrderNo(), WxRefundStatus.valueOf(refundStatus).getType());
+
+            // 更新退款单信息
+            refundInfoService.updateRefundInfo(bodyAsString);
+        }
+    }
+
+    /**
+     * 退款回调通知，微信支付平台向商户发送请求，通知商户订单的退款结果
+     * @param request:微信支付平台的http请求
+     * @throws Exception:验签失败告知上层调用
+     */
+    @Override
+    public void refundsNotify(HttpServletRequest request) throws Exception {
+        // 处理通知,得到通知信息
+        Notification notification = processRequest(request);
+
+        // 解密通知信息,更新订单和退款日志
+        processRefund(notification);
+    }
+
+    private void processRefund(Notification notification) {
+        Gson gson = new Gson();
+
+        // 解密 -> 获取支付成功的通知信息参数
+        String plainText = notification.getDecryptData();
+        log.info("解密得到退款通知明文 => {}", plainText);
+        HashMap<String, String> map = gson.fromJson(plainText, HashMap.class);
+
+        /*
+        处理重复通知:根据退款状态来判断是否已经通知并更新了数据，如果已经通知则直接返回，没通知则进行数据更新
+         */
+        try {
+            // 在对业务数据进行状态检查和处理之前，要采用数据锁进行并发控制，以避免函数重入造成的数据混乱
+            if (lock.tryLock()) { //获取锁:成功获取返回true,获取失败返回false;拿不到锁可以不用等待
+                String refundStatus = refundInfoService.getRefundStatusByRefundNo(map.get("out_refund_no"));
+                // 通知的退款状态与数据库查询到的退款状态一致，则直接返回
+                if (WxRefundStatus.valueOf(map.get("refund_status")).getType().equals(refundStatus)) {
+                    return;
+                }
+
+                //更新商户订单退款状态
+                orderInfoService.updateOrderStatusByOrderNo(map.get("out_trade_no"), WxRefundStatus.valueOf(map.get("refund_status")).getType());
+                log.info("更新退款状态 => {}", map.get("refund_status"));
+
+                //更新退款记录
+                refundInfoService.updateRefundInfo(plainText);
+            }
+        } finally {
+            // 主动释放锁
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public String queryRefund(String refundNo) throws Exception {
+        // 调用查询退款API
+        // https://api.mch.weixin.qq.com/v3/refund/domestic/refunds/{out_refund_no}
+        HttpGet httpGet = new HttpGet(wxPayConfig.getDomain().
+                concat(String.format(WxApiType.DOMESTIC_REFUNDS_QUERY.getType(), refundNo)));
+        httpGet.setHeader("Accept", "application/json");
+
+        try (CloseableHttpResponse response = wxPayClient.execute(httpGet)) {
+            int statusCode = response.getStatusLine().getStatusCode();
+            if (statusCode == 200 || statusCode == 204) { //查询成功
+                log.info("查询退款订单成功");
+            } else {
+                log.info("查询退款订单失败, 响应状态码 = " + statusCode + ", 错误信息 = " + EntityUtils.toString(response.getEntity()));
+            }
+            return EntityUtils.toString(response.getEntity());
+        } catch (Exception e) {
+            throw new Exception(EntityUtils.toString(wxPayClient.execute(httpGet).getEntity()));
+        }
+    }
+
+    @Override
+    public void checkRefundStatus(String refundNo) throws Exception {
+        Gson gson = new Gson();
+        String bodyJson = queryRefund(refundNo);
+        HashMap<String, String> map = gson.fromJson(bodyJson, HashMap.class);
+
+        // 确认退款单退款成功
+        if (WxRefundStatus.SUCCESS.toString().equals(map.get("status"))) {
+            log.info("微信平台确认退款状态为\"退款成功\" => {}", refundNo);
+            log.info("更新商户订单状态为\"退款成功\" => {}", map.get("out_trade_no"));
+            orderInfoService.updateOrderStatusByOrderNo(map.get("out_trade_no"), WxRefundStatus.SUCCESS.getType());
+            log.info("更新退款日志退款状态为\"退款成功\" => {}", refundNo);
+            refundInfoService.updateRefundStatusByRefundNo(refundNo, WxRefundStatus.SUCCESS.getType());
+        }
+
+        // 确认退款单仍处于"退款处理中"
+        if (WxRefundStatus.PROCESSING.toString().equals(map.get("state"))) {
+            log.info("微信平台确认退款状态为\"退款处理中\" => {}", refundNo);
+            log.info("更新商户订单状态为\"退款关闭\" => {}", map.get("out_trade_no"));
+            orderInfoService.updateOrderStatusByOrderNo(map.get("out_trade_no"), WxRefundStatus.CLOSED.getType());
+            log.info("更新退款日志退款状态为\"退款关闭\" => {}", refundNo);
+            refundInfoService.updateRefundStatusByRefundNo(refundNo, WxRefundStatus.CLOSED.getType());
         }
     }
 }

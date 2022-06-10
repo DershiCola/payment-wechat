@@ -55,6 +55,18 @@ public class OrderInfoServiceImpl extends ServiceImpl<OrderInfoMapper, OrderInfo
     }
 
     /**
+     * 根据订单号查询订单信息
+     * @param orderNo:订单号
+     * @return 订单信息对象
+     */
+    @Override
+    public OrderInfo getOrderInfoByOrderNo(String orderNo) {
+        QueryWrapper<OrderInfo> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("order_no", orderNo);
+        return baseMapper.selectOne(queryWrapper);
+    }
+
+    /**
      * 保存二维码链接
      * @param orderNo:订单号
      * @param codeUrl:二维码链接

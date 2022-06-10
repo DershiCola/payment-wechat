@@ -11,7 +11,7 @@ public interface WxPayService {
     Map<String, Object> nativePay(Long productId) throws Exception;
 
     /**
-     * 应答通知和更新订单状态
+     * 应答支付通知和更新订单状态
      */
     void nativeNotify(HttpServletRequest request) throws Exception;
 
@@ -25,5 +25,28 @@ public interface WxPayService {
      */
     String queryOrder(String orderNo) throws Exception;
 
+    /**
+     * 调用微信查单API确认订单状态
+     */
     void checkOrderStatus(String orderNo) throws Exception;
+
+    /**
+     * 订单退款
+     */
+    void refunds(String orderNo, String reason) throws Exception;
+
+    /**
+     * 应答退款通知和更新退款单状态
+     */
+    void refundsNotify(HttpServletRequest request) throws Exception;
+
+    /**
+     * 调用微信平台API查询退款单信息
+     */
+    String queryRefund(String refundNo) throws Exception;
+
+    /**
+     * 调用微信查询退款API确认退款状态
+     */
+    void checkRefundStatus(String refundNo) throws Exception;
 }

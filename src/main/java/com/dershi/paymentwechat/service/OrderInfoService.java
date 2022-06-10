@@ -7,6 +7,7 @@ import java.util.List;
 
 public interface OrderInfoService extends IService<OrderInfo> {
     OrderInfo getOrderInfoByProductId(Long productId);
+    OrderInfo getOrderInfoByOrderNo(String orderNo);
     void saveCodeUrl(String orderNo, String codeUrl);
     void deleteOrderInfoByOrderNo(String orderNo);
     List<OrderInfo> getAllOrderInfoByCreateTimeDesc();
