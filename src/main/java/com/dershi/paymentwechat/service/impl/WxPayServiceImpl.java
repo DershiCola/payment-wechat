@@ -13,11 +13,8 @@ import com.dershi.paymentwechat.service.PaymentInfoService;
 import com.dershi.paymentwechat.service.RefundInfoService;
 import com.dershi.paymentwechat.service.WxPayService;
 import com.dershi.paymentwechat.util.HttpUtils;
-import com.dershi.paymentwechat.vo.R;
 import com.google.gson.Gson;
 import com.wechat.pay.contrib.apache.httpclient.auth.Verifier;
-import com.wechat.pay.contrib.apache.httpclient.exception.ParseException;
-import com.wechat.pay.contrib.apache.httpclient.exception.ValidationException;
 import com.wechat.pay.contrib.apache.httpclient.notification.Notification;
 import com.wechat.pay.contrib.apache.httpclient.notification.NotificationHandler;
 import com.wechat.pay.contrib.apache.httpclient.notification.NotificationRequest;
@@ -29,11 +26,11 @@ import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.util.EntityUtils;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
@@ -56,6 +53,9 @@ public class WxPayServiceImpl implements WxPayService {
     private CloseableHttpClient wxPayClient;
 
     @Resource
+    private CloseableHttpClient wxPayNoSignClient;
+
+    @Resource
     private OrderInfoService orderInfoService;
 
     @Resource
@@ -72,6 +72,7 @@ public class WxPayServiceImpl implements WxPayService {
      * @return 订单号和二维码链接
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> nativePay(Long productId) throws Exception {
         log.info("生成订单");
         /*
@@ -153,6 +154,7 @@ public class WxPayServiceImpl implements WxPayService {
      * @throws Exception:验签失败告知上层调用
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void nativeNotify(HttpServletRequest request) throws Exception {
         // 处理请求,得到通知信息
         Notification notification = processRequest(request);
@@ -243,6 +245,7 @@ public class WxPayServiceImpl implements WxPayService {
      * @throws Exception:关单失败告知上层调用
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void cancelOrder(String orderNo) throws Exception {
         // 调用微信平台的关闭订单API
         closeOrder(orderNo);
@@ -311,6 +314,7 @@ public class WxPayServiceImpl implements WxPayService {
      * @param orderNo:订单号
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void checkOrderStatus(String orderNo) throws Exception {
         Gson gson = new Gson();
         String bodyJson = queryOrder(orderNo);
@@ -346,6 +350,7 @@ public class WxPayServiceImpl implements WxPayService {
      * @param reason:退款原因
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void refunds(String orderNo, String reason) throws Exception {
         // 创建退款订单记录对象
         RefundInfo refundInfo = refundInfoService.createRefundInfoByOrderNo(orderNo, reason);
@@ -401,6 +406,7 @@ public class WxPayServiceImpl implements WxPayService {
      * @throws Exception:验签失败告知上层调用
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void refundsNotify(HttpServletRequest request) throws Exception {
         // 处理通知,得到通知信息
         Notification notification = processRequest(request);
@@ -442,6 +448,11 @@ public class WxPayServiceImpl implements WxPayService {
         }
     }
 
+    /**
+     * 调用微信平台查询退款API
+     * @param refundNo:退款单号
+     * @return 退款单信息
+     */
     @Override
     public String queryRefund(String refundNo) throws Exception {
         // 调用查询退款API
@@ -463,7 +474,12 @@ public class WxPayServiceImpl implements WxPayService {
         }
     }
 
+    /**
+     * 调用查询退款API，判断退款单状态是否退款成功，并更新持久层
+     * @param refundNo:退款单号
+     */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void checkRefundStatus(String refundNo) throws Exception {
         Gson gson = new Gson();
         String bodyJson = queryRefund(refundNo);
@@ -485,6 +501,62 @@ public class WxPayServiceImpl implements WxPayService {
             orderInfoService.updateOrderStatusByOrderNo(map.get("out_trade_no"), WxRefundStatus.CLOSED.getType());
             log.info("更新退款日志退款状态为\"退款关闭\" => {}", refundNo);
             refundInfoService.updateRefundStatusByRefundNo(refundNo, WxRefundStatus.CLOSED.getType());
+        }
+    }
+
+    /**
+     * 调用微信平台申请账单API
+     * @param billDate:想申请的账单的日期
+     * @param billType:账单类型
+     * @return 账单下载链接(不能直接使用,需要签名后再发请求)
+     */
+    @Override
+    public String queryBill(String billDate, String billType) throws Exception {
+        String url = wxPayConfig.getDomain();
+        if ("tradebill".equals(billType)) {
+            url = url.concat(WxApiType.TRADE_BILLS.getType());
+        } else if ("fundflowbill".equals(billType)) {
+            url = url.concat(WxApiType.FUND_FLOW_BILLS.getType());
+        }
+        // 调用查询退款API
+        // https://api.mch.weixin.qq.com/v3/bill/{billType}
+        HttpGet httpGet = new HttpGet(url.concat("?bill_date=").concat(billDate));
+        httpGet.setHeader("Accept", "application/json");
+
+        try (CloseableHttpResponse response = wxPayClient.execute(httpGet)) {
+            int statusCode = response.getStatusLine().getStatusCode();
+            if (statusCode == 200 || statusCode == 204) { //查询成功
+                log.info("申请账单成功");
+            } else {
+                log.info("申请账单失败, 响应状态码 = " + statusCode + ", 错误信息 = " + EntityUtils.toString(response.getEntity()));
+            }
+            Gson gson = new Gson();
+            HashMap<String, String> map = gson.fromJson(EntityUtils.toString(response.getEntity()), HashMap.class);
+            log.info("获取账单下载地址 => {}", map.get("download_url"));
+            return map.get("download_url");
+        } catch (Exception e) {
+            throw new Exception(EntityUtils.toString(wxPayClient.execute(httpGet).getEntity()));
+        }
+    }
+
+    /**
+     * 下载账单
+     */
+    @Override
+    public String downloadBill(String billDate, String billType) throws Exception {
+        String downloadUrl = queryBill(billDate, billType);
+        HttpGet httpGet = new HttpGet(downloadUrl);
+        httpGet.setHeader("Accept", "application/json");
+        try (CloseableHttpResponse response = wxPayNoSignClient.execute(httpGet)) {
+            int statusCode = response.getStatusLine().getStatusCode();
+            if (statusCode == 200 || statusCode == 204) {
+                log.info("下载账单成功");
+            } else {
+                log.info("下载账单失败, 响应状态码 = " + statusCode + ", 错误信息 = " + EntityUtils.toString(response.getEntity()));
+            }
+            return EntityUtils.toString(response.getEntity());
+        } catch (Exception e) {
+            throw new Exception(EntityUtils.toString(wxPayClient.execute(httpGet).getEntity()));
         }
     }
 }

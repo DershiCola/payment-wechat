@@ -49,4 +49,8 @@ public interface WxPayService {
      * 调用微信查询退款API确认退款状态
      */
     void checkRefundStatus(String refundNo) throws Exception;
+
+    String queryBill(String billDate, String billType) throws Exception;
+
+    String downloadBill(String billDate, String billType) throws Exception;
 }

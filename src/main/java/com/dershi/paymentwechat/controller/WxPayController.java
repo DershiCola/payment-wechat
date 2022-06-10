@@ -72,7 +72,7 @@ public class WxPayController {
         }
     }
 
-    @ApiOperation("查询订单")
+    @ApiOperation("查询订单-测试用")
     @GetMapping("/query-order/{orderNo}")
     public R queryOrder(@PathVariable String orderNo) {
         try {
@@ -114,7 +114,7 @@ public class WxPayController {
         }
     }
 
-    @ApiOperation("查询退款单")
+    @ApiOperation("查询退款单-测试用")
     @GetMapping("/query-refund/{refundNo}")
     public R queryRefund(@PathVariable String refundNo) {
         try {
@@ -124,4 +124,29 @@ public class WxPayController {
             return R.error().setMessage("查询失败").data("errorReason", e.getMessage());
         }
     }
+
+    @ApiOperation("申请账单-测试用")
+    @GetMapping("/query-bill/{billDate}/{billType}")
+    public R queryBill(@PathVariable String billDate, @PathVariable String billType) {
+        try {
+            String downloadUrl = wxPayService.queryBill(billDate, billType);
+            return R.ok().setMessage("成功获取账单下载链接").data("downloadUrl", downloadUrl);
+        } catch (Exception e) {
+            return R.error().setMessage("获取账单下载链接失败");
+        }
+    }
+
+    @ApiOperation("下载账单")
+    @GetMapping("/download-bill/{billDate}/{billType}")
+    public R downloadBill(@PathVariable String billDate, @PathVariable String billType) {
+        try {
+            log.info("下载账单...");
+            String billContent = wxPayService.downloadBill(billDate, billType);
+            log.info("账单内容 => {}", billContent);
+            return R.ok().setMessage("成功下载账单").data("billContent", billContent);
+        } catch (Exception e) {
+            return R.error().setMessage("下载账单失败");
+        }
+    }
+
 }
