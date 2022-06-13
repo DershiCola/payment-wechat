@@ -69,6 +69,13 @@
             <version>0.4.7</version>
         </dependency>
 
+        <!-- 支付宝支付SDK -->
+        <dependency>
+            <groupId>com.alipay.sdk</groupId>
+            <artifactId>alipay-sdk-java</artifactId>
+            <version>4.31.7.ALL</version>
+        </dependency>
+
         <!-- json处理器 -->
         <dependency>
             <groupId>com.google.code.gson</groupId>
