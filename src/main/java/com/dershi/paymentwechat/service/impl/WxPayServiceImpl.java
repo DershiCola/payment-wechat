@@ -4,6 +4,7 @@ import com.dershi.paymentwechat.config.WxPayConfig;
 import com.dershi.paymentwechat.entity.OrderInfo;
 import com.dershi.paymentwechat.entity.RefundInfo;
 import com.dershi.paymentwechat.enums.OrderStatus;
+import com.dershi.paymentwechat.enums.PayType;
 import com.dershi.paymentwechat.enums.wxpay.WxApiType;
 import com.dershi.paymentwechat.enums.wxpay.WxNotifyType;
 import com.dershi.paymentwechat.enums.wxpay.WxRefundStatus;
@@ -78,7 +79,7 @@ public class WxPayServiceImpl implements WxPayService {
         /*
         生成订单
          */
-        OrderInfo orderInfo = orderInfoService.getOrderInfoByProductId(productId);
+        OrderInfo orderInfo = orderInfoService.getOrderInfoByProductId(productId, PayType.WXPAY.getType());
         String codeUrl = orderInfo.getCodeUrl();
         // 已存在未支付的订单且有二维码
         if (!StringUtils.isEmpty(codeUrl)) {
@@ -154,7 +155,6 @@ public class WxPayServiceImpl implements WxPayService {
      * @throws Exception:验签失败告知上层调用
      */
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public void nativeNotify(HttpServletRequest request) throws Exception {
         // 处理请求,得到通知信息
         Notification notification = processRequest(request);
@@ -199,7 +199,10 @@ public class WxPayServiceImpl implements WxPayService {
      * 解密被加密的通知信息，获取订单支付成功的具体信息，并更新处理订单，记录支付日志
      * @param notification:验签成功后得到的通知对象
      */
-    private void processOrder(Notification notification) {
+    @Transactional(rollbackFor = Exception.class)
+    public void processOrder(Notification notification) {
+        log.info("处理微信支付订单");
+
         Gson gson = new Gson();
 
         // 解密 -> 获取支付成功的通知信息参数
@@ -210,9 +213,9 @@ public class WxPayServiceImpl implements WxPayService {
         /*
         处理重复通知:根据订单状态来判断是否已经通知并更新了数据，如果已经通知则直接返回，没通知则进行数据更新和日志记录
          */
-        try {
-            // 在对业务数据进行状态检查和处理之前，要采用数据锁进行并发控制，以避免函数重入造成的数据混乱
-            if (lock.tryLock()) { //获取锁:成功获取返回true,获取失败返回false;拿不到锁可以不用等待
+        // 在对业务数据进行状态检查和处理之前，要采用数据锁进行并发控制，以避免函数重入造成的数据混乱
+        if (lock.tryLock()) { //获取锁:成功获取返回true,获取失败返回false;拿不到锁可以不用等待
+            try {
                 String orderStatus = orderInfoService.getOrderStatusByOrderNo(map.get("out_trade_no"));
                 // 通知的订单状态与数据库查询到的订单状态一致，则直接返回
                 if (OrderStatus.valueOf(map.get("trade_state")).getType().equals(orderStatus)) {
@@ -231,11 +234,12 @@ public class WxPayServiceImpl implements WxPayService {
                 log.info("更新订单状态 => {}", map.get("trade_state"));
 
                 //记录支付日志
-                paymentInfoService.createPaymentInfo(plainText);
+                paymentInfoService.createPaymentInfoForWx(plainText);
+                log.info("记录支付日志");
+            } finally {
+                // 主动释放锁
+                lock.unlock();
             }
-        } finally {
-            // 主动释放锁
-            lock.unlock();
         }
     }
 
@@ -289,6 +293,7 @@ public class WxPayServiceImpl implements WxPayService {
      */
     @Override
     public String queryOrder(String orderNo) throws Exception {
+        log.info("调用查单接口 => {}", orderNo);
         // 调用查单API
         // https://api.mch.weixin.qq.com/v3/pay/transactions/out-trade-no/{out_trade_no}
         HttpGet httpGet = new HttpGet(wxPayConfig.getDomain()
@@ -328,7 +333,7 @@ public class WxPayServiceImpl implements WxPayService {
             orderInfoService.updateOrderStatusByOrderNo(orderNo, OrderStatus.SUCCESS.getType());
             // 记录支付日志
             log.info("创建支付日志 => {}", orderNo);
-            paymentInfoService.createPaymentInfo(bodyJson);
+            paymentInfoService.createPaymentInfoForWx(bodyJson);
         }
 
         // 确认订单未支付
@@ -396,7 +401,7 @@ public class WxPayServiceImpl implements WxPayService {
             orderInfoService.updateOrderStatusByOrderNo(refundInfo.getOrderNo(), WxRefundStatus.valueOf(refundStatus).getType());
 
             // 更新退款单信息
-            refundInfoService.updateRefundInfo(bodyAsString);
+            refundInfoService.updateRefundInfoForWx(bodyAsString);
         }
     }
 
@@ -440,7 +445,7 @@ public class WxPayServiceImpl implements WxPayService {
                 log.info("更新退款状态 => {}", map.get("refund_status"));
 
                 //更新退款记录
-                refundInfoService.updateRefundInfo(plainText);
+                refundInfoService.updateRefundInfoForWx(plainText);
             }
         } finally {
             // 主动释放锁

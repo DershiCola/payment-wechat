@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.dershi.paymentwechat.entity.OrderInfo;
 import com.dershi.paymentwechat.entity.RefundInfo;
 import com.dershi.paymentwechat.enums.OrderStatus;
+import com.dershi.paymentwechat.enums.alipay.AliRefundStatus;
 import com.dershi.paymentwechat.enums.wxpay.WxRefundStatus;
 import com.dershi.paymentwechat.mapper.RefundInfoMapper;
 import com.dershi.paymentwechat.service.OrderInfoService;
@@ -18,6 +19,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class RefundInfoServiceImpl extends ServiceImpl<RefundInfoMapper, RefundInfo> implements RefundInfoService {
@@ -43,7 +45,7 @@ public class RefundInfoServiceImpl extends ServiceImpl<RefundInfoMapper, RefundI
     }
 
     @Override
-    public void updateRefundInfo(String content) {
+    public void updateRefundInfoForWx(String content) {
         Gson gson = new Gson();
         HashMap<String, String> map = gson.fromJson(content, HashMap.class);
         QueryWrapper<RefundInfo> queryWrapper = new QueryWrapper<>();
@@ -65,6 +67,23 @@ public class RefundInfoServiceImpl extends ServiceImpl<RefundInfoMapper, RefundI
             refundInfo.setRefundStatus(WxRefundStatus.valueOf(map.get("refund_status")).getType()); //退款状态
             refundInfo.setContentNotify(content);
         }
+
+        baseMapper.update(refundInfo, queryWrapper);
+    }
+
+    @Override
+    public void updateRefundInfoForAli(String refundNo, String content, String status) {
+        Gson gson = new Gson();
+        HashMap<String, Object> map = gson.fromJson(content, HashMap.class);
+        QueryWrapper<RefundInfo> queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("refund_no", refundNo);
+
+        // 设置修改的字段
+        RefundInfo refundInfo = new RefundInfo();
+        Map<String, String> resMap = (Map<String, String>) map.get("alipay_trade_refund_response");
+        refundInfo.setRefundId(resMap.get("trade_no")); //支付宝退款单号
+        refundInfo.setRefundStatus(status);
+        refundInfo.setContentReturn(content);
 
         baseMapper.update(refundInfo, queryWrapper);
     }

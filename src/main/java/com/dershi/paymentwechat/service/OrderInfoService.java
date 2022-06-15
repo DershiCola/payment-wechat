@@ -6,12 +6,12 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import java.util.List;
 
 public interface OrderInfoService extends IService<OrderInfo> {
-    OrderInfo getOrderInfoByProductId(Long productId);
+    OrderInfo getOrderInfoByProductId(Long productId, String paymentType);
     OrderInfo getOrderInfoByOrderNo(String orderNo);
     void saveCodeUrl(String orderNo, String codeUrl);
     void deleteOrderInfoByOrderNo(String orderNo);
     List<OrderInfo> getAllOrderInfoByCreateTimeDesc();
     void updateOrderStatusByOrderNo(String orderNo, String orderStatus);
     String getOrderStatusByOrderNo(String orderNo);
-    List<OrderInfo> getUnpaidOrdersByDuration(int minutes);
+    List<OrderInfo> getUnpaidOrdersByDuration(int minutes, String paymentType);
 }
